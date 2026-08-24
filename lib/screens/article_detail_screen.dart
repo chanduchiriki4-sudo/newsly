@@ -78,10 +78,18 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
       selectedReaction = ReactionService.getReaction(title);
     });
   }
+  // GNews truncates content with a "[123 chars]" suffix — strip that off
+  // so it doesn't look like a rendering glitch.
+  String get _expandedContent {
+    final raw = widget.article['content'] ?? '';
+    final cleaned = raw.replaceAll(RegExp(r'\s*\[\d+\s*chars\]\s*$'), '').trim();
+    return cleaned.isNotEmpty ? cleaned : (widget.article['description'] ?? '');
+  }
 
   @override
   Widget build(BuildContext context) {
     final article = widget.article;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       body: CustomScrollView(
@@ -89,190 +97,261 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           SliverAppBar(
             expandedHeight: 280,
             pinned: true,
+            elevation: 0,
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+            leading: Padding(
+              padding: const EdgeInsets.all(8),
+              child: CircleAvatar(
+                backgroundColor: Colors.black.withValues(alpha: 0.35),
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.share),
-                onPressed: () {
-                  Share.share(
-                    '${article['title']}\n\nRead more: ${article['url']}',
-                  );
-                },
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: CircleAvatar(
+                  backgroundColor: Colors.black.withValues(alpha: 0.35),
+                  child: IconButton(
+                    icon: const Icon(Icons.share_rounded, color: Colors.white, size: 19),
+                    onPressed: () {
+                      Share.share(
+                        '${article['title']}\n\nRead more: ${article['url']}',
+                      );
+                    },
+                  ),
+                ),
               ),
             ],
             flexibleSpace: FlexibleSpaceBar(
-              background: article['imageUrl'] != null && article['imageUrl'] != ''
-                  ? CachedNetworkImage(
-                      imageUrl: article['imageUrl'],
-                      fit: BoxFit.cover,
-                      errorWidget: (context, url, error) =>
-                          const NewslyImagePlaceholder(height: 280, iconSize: 70),
-                      placeholder: (context, url) => Container(
-                        color: Colors.grey[200],
-                        child: const Center(child: CircularProgressIndicator()),
-                      ),
-                    )
-                  : const NewslyImagePlaceholder(height: 280, iconSize: 70),
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              background: Stack(
+                fit: StackFit.expand,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.deepOrange.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          article['source'] ?? 'Unknown',
-                          style: const TextStyle(
-                            color: Colors.deepOrange,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
+                  article['imageUrl'] != null && article['imageUrl'] != ''
+                      ? CachedNetworkImage(
+                          imageUrl: article['imageUrl'],
+                          fit: BoxFit.cover,
+                          errorWidget: (context, url, error) =>
+                              const NewslyImagePlaceholder(height: 280, iconSize: 70),
+                          placeholder: (context, url) => Container(
+                            color: Colors.grey[200],
+                            child: const Center(child: CircularProgressIndicator()),
                           ),
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: toggleSpeech,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isSpeaking
-                                ? Colors.deepOrange
-                                : Colors.deepOrange.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                isSpeaking ? Icons.stop_circle : Icons.volume_up,
-                                size: 18,
-                                color: isSpeaking ? Colors.white : Colors.deepOrange,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                isSpeaking ? 'Stop' : 'Listen',
-                                style: TextStyle(
-                                  color: isSpeaking ? Colors.white : Colors.deepOrange,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    article['title'] ?? '',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
-                      const SizedBox(width: 4),
-                      Text(
-                        article['publishedAt'] ?? '',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    article['description'] ?? 'No description available.',
-                    style: const TextStyle(fontSize: 16, height: 1.6),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Reactions
-                  const Text(
-                    'How does this make you feel?',
-                    style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: reactionOptions.map((option) {
-                      final bool isSelected = selectedReaction == option['emoji'];
-                      return GestureDetector(
-                        onTap: () => handleReaction(option['emoji']!),
-                        child: Container(
-                          margin: const EdgeInsets.only(right: 10),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? Colors.deepOrange.withValues(alpha: 0.15)
-                                : Theme.of(context).cardColor,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: isSelected ? Colors.deepOrange : Colors.grey.withValues(alpha: 0.3),
-                              width: isSelected ? 1.5 : 1,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(option['emoji']!, style: const TextStyle(fontSize: 18)),
-                              const SizedBox(width: 6),
-                              Text(
-                                option['label']!,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: isSelected ? Colors.deepOrange : Colors.grey[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-
-                  const SizedBox(height: 30),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        final url = article['url'];
-                        if (url != null && url != '') {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => WebViewScreen(
-                                url: url,
-                                title: article['source'] ?? 'Article',
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      icon: const Icon(Icons.open_in_new),
-                      label: const Text('Read Full Article'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepOrange,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        )
+                      : const NewslyImagePlaceholder(height: 280, iconSize: 70),
+                  // Subtle bottom gradient so the status bar icons and back
+                  // button stay legible over bright images.
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.25),
+                          Colors.transparent,
+                          Colors.transparent,
+                        ],
+                        stops: const [0.0, 0.3, 1.0],
                       ),
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Transform.translate(
+              offset: const Offset(0, -16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: Colors.deepOrange.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              article['source'] ?? 'Unknown',
+                              style: const TextStyle(
+                                color: Colors.deepOrange,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12.5,
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: toggleSpeech,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: isSpeaking
+                                    ? Colors.deepOrange
+                                    : Colors.deepOrange.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    isSpeaking ? Icons.stop_rounded : Icons.volume_up_rounded,
+                                    size: 17,
+                                    color: isSpeaking ? Colors.white : Colors.deepOrange,
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    isSpeaking ? 'Stop' : 'Listen',
+                                    style: TextStyle(
+                                      color: isSpeaking ? Colors.white : Colors.deepOrange,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        article['title'] ?? '',
+                        style: const TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w800,
+                          height: 1.32,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(Icons.access_time_rounded, size: 13, color: Colors.grey[500]),
+                          const SizedBox(width: 4),
+                          Text(
+                            article['publishedAt'] ?? '',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        _expandedContent.isNotEmpty
+                            ? _expandedContent
+                            : 'No description available.',
+                        style: const TextStyle(fontSize: 15.5, height: 1.65),
+                      ),
+                      const SizedBox(height: 26),
+
+                      // Reactions
+                      Text(
+                        'How does this make you feel?',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: Colors.grey[500],
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: reactionOptions.map((option) {
+                          final bool isSelected = selectedReaction == option['emoji'];
+                          return GestureDetector(
+                            onTap: () => handleReaction(option['emoji']!),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              margin: const EdgeInsets.only(right: 10),
+                              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? Colors.deepOrange.withValues(alpha: 0.12)
+                                    : (isDark
+                                        ? Colors.white.withValues(alpha: 0.06)
+                                        : Colors.grey.withValues(alpha: 0.06)),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? Colors.deepOrange
+                                      : Colors.transparent,
+                                  width: 1.3,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(option['emoji']!, style: const TextStyle(fontSize: 17)),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    option['label']!,
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: isSelected
+                                          ? Colors.deepOrange
+                                          : Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+
+                      const SizedBox(height: 28),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            final url = article['url'];
+                            if (url != null && url != '') {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => WebViewScreen(
+                                    url: url,
+                                    title: article['source'] ?? 'Article',
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.open_in_new_rounded, size: 19),
+                          label: const Text(
+                            'Read Full Article',
+                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.deepOrange,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),

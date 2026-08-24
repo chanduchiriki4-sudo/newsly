@@ -4,12 +4,18 @@ import '../widgets/quote_card.dart';
 import '../widgets/shimmer_card.dart';
 import '../widgets/breaking_news_banner.dart';
 import '../widgets/trending_card.dart';
+import '../widgets/info_strip_card.dart';
 import '../services/news_service.dart';
 import '../services/country_service.dart';
 import '../services/bookmark_service.dart';
 import '../services/quote_service.dart';
 import '../services/preference_service.dart';
 import '../services/city_service.dart';
+import '../services/search_history_service.dart';
+import '../services/wikipedia_service.dart';
+import '../services/weather_service.dart';
+import '../services/crypto_service.dart';
+import '../services/stock_service.dart';
 import 'article_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -22,6 +28,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> newsList = [];
   List<Map<String, dynamic>> trendingList = [];
+  List<String> relatedSearches = [];
+  Map<String, dynamic>? weatherData;
+  List<Map<String, dynamic>> cryptoList = [];
+  List<Map<String, dynamic>> stockList = [];
   bool isLoading = true;
   bool isLoadingMore = false;
   bool hasMore = true;
@@ -29,8 +39,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String errorMessage = '';
   bool isSearching = false;
   bool showSuggestions = false;
-  String selectedCategory = 'foryou';
-  String lastSearchQuery = '';
+    String selectedCategory = 'general';
+   String lastSearchQuery = '';
   String currentSortBy = 'relevance';
 
   final TextEditingController searchController = TextEditingController();
@@ -55,8 +65,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'newest', 'update', 'this week', 'currently',
   ];
 
-  // Built fresh each time so the "My City" chip only appears once a city
-  // has actually been set in Settings.
   List<Map<String, dynamic>> get categories {
     final list = <Map<String, dynamic>>[
       {'label': 'For You', 'value': 'foryou', 'icon': Icons.star_rounded},
@@ -86,6 +94,9 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     loadNews();
     loadTrending();
+    loadWeather();
+    loadCrypto();
+    loadStocks();
     _scrollController.addListener(_onScroll);
   }
 
@@ -104,6 +115,45 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (currentScroll >= maxScroll - 300) {
       loadMoreNews();
+    }
+  }
+
+  Future<void> loadWeather() async {
+    try {
+      final weather = await WeatherService.fetchCurrentWeather();
+      if (mounted && weather != null) {
+        setState(() {
+          weatherData = weather;
+        });
+      }
+    } catch (e) {
+      // Weather is a bonus card — fail silently, don't disturb the feed.
+    }
+  }
+
+  Future<void> loadCrypto() async {
+    try {
+      final crypto = await CryptoService.fetchTopCrypto();
+      if (mounted && crypto.isNotEmpty) {
+        setState(() {
+          cryptoList = crypto;
+        });
+      }
+    } catch (e) {
+      // Crypto is a bonus card — fail silently.
+    }
+  }
+
+  Future<void> loadStocks() async {
+    try {
+      final stocks = await StockService.fetchIndices();
+      if (mounted && stocks.isNotEmpty) {
+        setState(() {
+          stockList = stocks;
+        });
+      }
+    } catch (e) {
+      // Bonus card — fail silently.
     }
   }
 
@@ -136,6 +186,64 @@ class _HomeScreenState extends State<HomeScreen> {
       'query': cleaned,
       'sortBy': wantsLatest ? 'publishedAt' : 'relevance',
     };
+  }
+
+  List<Map<String, dynamic>> _reRankByRelevance(
+    List<Map<String, dynamic>> articles,
+    String query,
+  ) {
+    final queryWords = query
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length >= 3)
+        .toList();
+
+    if (queryWords.isEmpty) return articles;
+
+    int scoreFor(Map<String, dynamic> article) {
+      final title = (article['title'] ?? '').toString().toLowerCase();
+      int score = 0;
+      for (final word in queryWords) {
+        if (title.contains(word)) {
+          score += 2;
+          if (title.startsWith(word)) score += 1;
+        }
+      }
+      return score;
+    }
+
+    final scored = articles.map((a) => MapEntry(a, scoreFor(a))).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return scored.map((e) => e.key).toList();
+  }
+
+  List<String> _extractRelatedTerms(
+    List<Map<String, dynamic>> articles,
+    String excludeQuery,
+  ) {
+    final excludeLower = excludeQuery.toLowerCase();
+    final Map<String, int> phraseCounts = {};
+
+    final properNounPattern =
+        RegExp(r'\b([A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*){0,2})\b');
+
+    for (final article in articles) {
+      final title = (article['title'] ?? '').toString();
+      final matches = properNounPattern.allMatches(title);
+      for (final match in matches) {
+        final phrase = match.group(0)!.trim();
+        if (phrase.length < 3) continue;
+        if (phrase.toLowerCase() == excludeLower) continue;
+        if (excludeLower.contains(phrase.toLowerCase())) continue;
+        phraseCounts[phrase] = (phraseCounts[phrase] ?? 0) + 1;
+      }
+    }
+
+    final sorted = phraseCounts.entries.where((e) => e.value >= 2).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return sorted.take(6).map((e) => e.key).toList();
   }
 
   Future<void> loadNews() async {
@@ -190,6 +298,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> performSearch(String rawQuery) async {
     if (rawQuery.trim().isEmpty) return;
 
+    SearchHistoryService.addSearch(rawQuery.trim());
+
     setState(() {
       isLoading = true;
       errorMessage = '';
@@ -200,7 +310,7 @@ class _HomeScreenState extends State<HomeScreen> {
       hasMore = true;
     });
 
-    final analyzed = _analyzeQuery(rawQuery);
+        final analyzed = _analyzeQuery(rawQuery);
     currentSortBy = analyzed['sortBy']!;
 
     try {
@@ -210,13 +320,70 @@ class _HomeScreenState extends State<HomeScreen> {
         sortBy: currentSortBy,
       );
 
-      if (news.isEmpty && currentSortBy != 'publishedAt') {
-        currentSortBy = 'publishedAt';
-        news = await NewsService.searchNews(
-          analyzed['query']!,
-          page: 1,
-          sortBy: currentSortBy,
-        );
+      // If results are thin, try Wikipedia to find a closely related term
+      // (e.g. "ISRO" -> "Indian Space Research Organisation") and search
+      // that too — broadens results without needing AI.
+      if (news.length < 6) {
+        final relatedTopics = await WikipediaService.fetchRelatedTopics(analyzed['query']!);
+        final existingTitles = news.map((a) => a['title']).toSet();
+        for (final topic in relatedTopics.take(2)) {
+          if (topic.toLowerCase() == analyzed['query']!.toLowerCase()) continue;
+          try {
+            final extra = await NewsService.searchNews(
+              topic,
+              page: 1,
+              sortBy: currentSortBy,
+            );
+            for (final article in extra) {
+              if (!existingTitles.contains(article['title'])) {
+                existingTitles.add(article['title']);
+                news.add(article);
+              }
+            }
+          } catch (_) {
+            continue;
+          }
+        }
+      }
+
+
+      
+               // Free-plan searches often return very few results for niche queries.
+      // Pull additional pages (newest-first) and the other sort order too,
+      // merging everything (deduped) so today's news appears first, followed
+      // by slightly older articles — giving a fuller, richer result list.
+      if (news.length < 8) {
+        final existingTitles = news.map((a) => a['title']).toSet();
+
+        Future<void> addMore(String sortBy, int page) async {
+          try {
+            final more = await NewsService.searchNews(
+              analyzed['query']!,
+              page: page,
+              sortBy: sortBy,
+            );
+            for (final article in more) {
+              if (!existingTitles.contains(article['title'])) {
+                existingTitles.add(article['title']);
+                news.add(article);
+              }
+            }
+          } catch (_) {
+            // ignore individual page failures
+          }
+        }
+
+        final fallbackSort = currentSortBy == 'publishedAt' ? 'relevance' : 'publishedAt';
+        await addMore(fallbackSort, 1);
+        await addMore('publishedAt', 2);
+        await addMore('publishedAt', 3);
+
+        // Newest first, since we merged from multiple sources/pages.
+        news.sort((a, b) {
+          final dateA = DateTime.tryParse(a['publishedAt'] ?? '') ?? DateTime(2000);
+          final dateB = DateTime.tryParse(b['publishedAt'] ?? '') ?? DateTime(2000);
+          return dateB.compareTo(dateA);
+        });
       }
 
       if (news.isEmpty && analyzed['query'] != rawQuery.trim()) {
@@ -226,12 +393,19 @@ class _HomeScreenState extends State<HomeScreen> {
           sortBy: currentSortBy,
         );
       }
+            final ranked = currentSortBy == 'relevance'
+          ? _reRankByRelevance(news, rawQuery)
+          : news;
+
+      debugPrint('Search "$rawQuery" -> ${ranked.length} results, sortBy: $currentSortBy');
 
       setState(() {
-        newsList = news;
+        newsList = ranked;
+        relatedSearches = _extractRelatedTerms(ranked, rawQuery);
         isLoading = false;
       });
-    } catch (e) {
+        } catch (e) {
+      debugPrint('Search Error: $e');
       setState(() {
         errorMessage = 'Search failed. Please try again.';
         isLoading = false;
@@ -251,7 +425,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> loadMoreNews() async {
     if (isLoadingMore || !hasMore || isLoading) return;
 
-    // "For You" is a merged, deduplicated feed without page-based pagination.
     if (selectedCategory == 'foryou') return;
 
     setState(() {
@@ -324,8 +497,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
+        titleSpacing: 20,
         title: isSearching
             ? TextField(
                 controller: searchController,
@@ -336,10 +512,43 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 onSubmitted: performSearch,
               )
-            : const Text('Newsly'),
+            : Row(
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFFF6B35), Color(0xFFE64A19)],
+                      ),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'N',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Newsly',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                ],
+              ),
         actions: [
           IconButton(
-            icon: Icon(isSearching ? Icons.close : Icons.search),
+            icon: Icon(isSearching ? Icons.close_rounded : Icons.search_rounded),
             onPressed: () {
               if (isSearching) {
                 searchController.clear();
@@ -352,16 +561,17 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
           ),
+          const SizedBox(width: 6),
         ],
       ),
       body: Column(
         children: [
           if (!isSearching)
             SizedBox(
-              height: 50,
+              height: 52,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 itemCount: categories.length,
                 itemBuilder: (context, index) {
                   final cat = categories[index];
@@ -377,9 +587,23 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       selected: isSelected,
                       selectedColor: Colors.deepOrange,
+                      backgroundColor: isDark
+                          ? Colors.white.withValues(alpha: 0.08)
+                          : Colors.grey.withValues(alpha: 0.08),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide.none,
+                      ),
+                      elevation: isSelected ? 2 : 0,
+                      shadowColor: Colors.deepOrange.withValues(alpha: 0.3),
                       labelStyle: TextStyle(
-                        color: isSelected ? Colors.white : Colors.black87,
+                        color: isSelected
+                            ? Colors.white
+                            : isDark
+                                ? Colors.white70
+                                : Colors.black87,
                         fontWeight: FontWeight.w600,
+                        fontSize: 13,
                       ),
                       onSelected: (_) => selectCategory(cat['value']),
                     ),
@@ -394,14 +618,76 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget buildSuggestions() {
-    return Padding(
+    final recent = SearchHistoryService.recentSearches;
+
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Trending Searches',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          if (recent.isNotEmpty) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.history_rounded, color: Colors.grey[600], size: 19),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Recent Searches',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      SearchHistoryService.clearHistory();
+                    });
+                  },
+                  child: Text(
+                    'Clear',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: Colors.deepOrange,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: recent.map((term) {
+                return ActionChip(
+                  label: Text(term),
+                  avatar: Icon(Icons.history_rounded, size: 16, color: Colors.grey[600]),
+                  backgroundColor: Colors.grey.withValues(alpha: 0.1),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide.none,
+                  ),
+                  labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                  onPressed: () {
+                    searchController.text = term;
+                    performSearch(term);
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 24),
+          ],
+          Row(
+            children: [
+              Icon(Icons.trending_up_rounded, color: Colors.deepOrange, size: 19),
+              const SizedBox(width: 6),
+              const Text(
+                'Trending Searches',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           Wrap(
@@ -412,6 +698,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: Text(term),
                 avatar: const Icon(Icons.trending_up, size: 16, color: Colors.deepOrange),
                 backgroundColor: Colors.deepOrange.withValues(alpha: 0.08),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide.none,
+                ),
                 labelStyle: const TextStyle(fontWeight: FontWeight.w600),
                 onPressed: () {
                   searchController.text = term;
@@ -427,7 +717,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget buildTrendingSection() {
     return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 4),
+      padding: const EdgeInsets.only(top: 8, bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -435,16 +725,31 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                const Icon(Icons.local_fire_department, color: Colors.deepOrange, size: 20),
-                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.deepOrange.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.local_fire_department_rounded,
+                    color: Colors.deepOrange,
+                    size: 16,
+                  ),
+                ),
+                const SizedBox(width: 8),
                 const Text(
                   'Trending Now',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: 16.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           SizedBox(
             height: 200,
             child: ListView.builder(
@@ -538,11 +843,56 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    final todaysQuote = QuoteService.getTodaysQuote();
+    if (isSearching && relatedSearches.isNotEmpty) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: SizedBox(
+              height: 36,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: relatedSearches.length,
+                itemBuilder: (context, index) {
+                  final term = relatedSearches[index];
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ActionChip(
+                      label: Text(term, style: const TextStyle(fontSize: 12.5)),
+                      backgroundColor: Colors.deepOrange.withValues(alpha: 0.08),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide.none,
+                      ),
+                      labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                      onPressed: () => performSearch(term),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          Expanded(child: buildNewsListView()),
+        ],
+      );
+    }
 
+    return buildNewsListView();
+  }
+
+  Widget buildNewsListView() {
+    final todaysQuote = QuoteService.getTodaysQuote();
+    final bool showInfoStrip =
+        !isSearching && (weatherData != null || cryptoList.isNotEmpty);
     final bool showTrending = !isSearching && trendingList.isNotEmpty;
+    final int infoOffset = showInfoStrip ? 1 : 0;
     final int trendingOffset = showTrending ? 1 : 0;
-    final int baseOffset = 2 + trendingOffset;
+    final int baseOffset = 2 + infoOffset + trendingOffset;
+
+    final int bannerIndex = 0;
+    final int infoIndex = 1;
+    final int quoteIndex = 1 + infoOffset;
+    final int trendingIndex = 2 + infoOffset;
 
     return RefreshIndicator(
       onRefresh: retryCurrent,
@@ -554,7 +904,7 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.only(top: 6, bottom: 20),
         itemCount: newsList.length + baseOffset + 1,
         itemBuilder: (context, index) {
-          if (index == 0) {
+          if (index == bannerIndex) {
             return BreakingNewsBanner(
               title: newsList[0]['title'],
               onTap: () {
@@ -568,14 +918,31 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }
 
-          if (index == 1) {
+          if (showInfoStrip && index == infoIndex) {
+            String? label;
+            String? icon;
+            if (weatherData != null) {
+              final desc = WeatherService.describeWeatherCode(weatherData!['weatherCode']);
+              label = desc['label'];
+              icon = desc['icon'];
+            }
+            return InfoStripCard(
+              temperature: weatherData?['temperature'],
+              weatherLabel: label,
+              weatherIcon: icon,
+              cryptoList: cryptoList,
+              stockList: stockList,
+            );
+          }
+
+          if (index == quoteIndex) {
             return QuoteCard(
               quote: todaysQuote['quote']!,
               author: todaysQuote['author']!,
             );
           }
 
-          if (showTrending && index == 2) {
+          if (showTrending && index == trendingIndex) {
             return buildTrendingSection();
           }
 

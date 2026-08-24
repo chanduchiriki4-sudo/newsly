@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home_screen.dart';
 import 'screens/bookmarks_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'services/app_settings_service.dart';
 import 'services/bookmark_service.dart';
 import 'services/history_service.dart';
@@ -13,6 +15,7 @@ import 'services/reaction_service.dart';
 import 'services/preference_service.dart';
 import 'services/city_service.dart';
 import 'services/notification_service.dart';
+import 'services/search_history_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,13 +28,20 @@ void main() async {
   await HistoryService.init();
   await ReactionService.init();
   await PreferenceService.init();
+  await SearchHistoryService.init();
   await CityService.init();
   await NotificationService.init();
-  runApp(const NewsApp());
+
+  final prefs = await SharedPreferences.getInstance();
+  final bool hasSeenOnboarding = prefs.getBool('has_seen_onboarding') ?? false;
+
+  runApp(NewsApp(hasSeenOnboarding: hasSeenOnboarding));
 }
 
 class NewsApp extends StatefulWidget {
-  const NewsApp({super.key});
+  final bool hasSeenOnboarding;
+
+  const NewsApp({super.key, required this.hasSeenOnboarding});
 
   @override
   State<NewsApp> createState() => _NewsAppState();
@@ -52,6 +62,18 @@ class _NewsAppState extends State<NewsApp> {
 
   @override
   Widget build(BuildContext context) {
+    final mainNav = MainNavigation(
+      isDarkMode: isDarkMode,
+      onToggleTheme: toggleTheme,
+      onSettingsChanged: refreshSettings,
+    );
+
+    // First launch ever -> show onboarding after splash.
+    // Every launch after that -> go straight to the app.
+    final Widget afterSplash = widget.hasSeenOnboarding
+        ? mainNav
+        : OnboardingScreen(nextScreen: mainNav);
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Newsly',
@@ -96,13 +118,7 @@ class _NewsAppState extends State<NewsApp> {
         ),
       ),
       themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
-      home: SplashScreen(
-        nextScreen: MainNavigation(
-          isDarkMode: isDarkMode,
-          onToggleTheme: toggleTheme,
-          onSettingsChanged: refreshSettings,
-        ),
-      ),
+      home: SplashScreen(nextScreen: afterSplash),
     );
   }
 }

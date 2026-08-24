@@ -108,6 +108,7 @@ class NewsService {
           return {
             'title': article['title'] ?? 'No title',
             'description': article['description'] ?? '',
+            'content': article['content'] ?? '',
             'imageUrl': article['image'] ?? '',
             'source': article['source']?['name'] ?? 'Unknown',
             'publishedAt': article['publishedAt'] ?? '',
